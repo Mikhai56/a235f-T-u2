@@ -81,7 +81,7 @@ jobs:
           make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
             ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
             CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
-            CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y all Image
           if [[ "${{ inputs.build_modules }}" == "true" ]]; then
             make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
               ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
@@ -98,12 +98,41 @@ jobs:
           cp source-commit.txt artifacts/source-commit.txt 2>/dev/null || true
           if [[ -s out/arch/arm64/boot/Image ]]; then
             cp out/arch/arm64/boot/Image artifacts/Image
-            sha256sum artifacts/Image | tee artifacts/SHA256SUMS
             file artifacts/Image | tee artifacts/image-file-type.txt
           else
             echo 'No kernel Image was produced.' | tee artifacts/BUILD-RESULT.txt
           fi
           [[ ! -f out/.config ]] || cp out/.config artifacts/kernel.config
+
+          DT_ROOT="$GITHUB_WORKSPACE/out/arch/arm64/boot/dts"
+          mkdir -p artifacts/device-tree
+          if [[ -d "$DT_ROOT" ]]; then
+            (
+              cd "$DT_ROOT"
+              find . -type f \( -name '*.dtb' -o -name '*.dtbo' \) -print | sort > "$GITHUB_WORKSPACE/artifacts/device-tree-files.txt"
+              while IFS= read -r file; do
+                [[ -n "$file" ]] || continue
+                mkdir -p "$GITHUB_WORKSPACE/artifacts/device-tree/$(dirname "$file")"
+                cp "$file" "$GITHUB_WORKSPACE/artifacts/device-tree/$file"
+              done < "$GITHUB_WORKSPACE/artifacts/device-tree-files.txt"
+            )
+            {
+              for expected in vendor/qcom/khaje.dtb samsung/a23/a23/a23_eur_open_w00_r09.dtbo; do
+                if [[ -s "$DT_ROOT/$expected" ]]; then
+                  echo "FOUND $expected"
+                else
+                  echo "MISSING $expected"
+                fi
+              done
+            } | tee artifacts/DTB-RESULT.txt
+          else
+            echo 'DTB output directory missing.' | tee artifacts/DTB-RESULT.txt
+            : > artifacts/device-tree-files.txt
+          fi
+          {
+            sha256sum artifacts/Image 2>/dev/null || true
+            find artifacts/device-tree -type f \( -name '*.dtb' -o -name '*.dtbo' \) -print0 | sort -z | xargs -0 -r sha256sum
+          } | tee artifacts/SHA256SUMS
           find out -type f -name '*.ko' -print 2>/dev/null | head -n 500 > artifacts/module-files.txt || true
 
       - name: Upload build artifacts
